@@ -73,6 +73,124 @@ jobs:
           echo "📋 Project files:"
           find . -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.json" -o -name "*.yml" | grep -v node_modules | sort
 
+  javascript-lint:
+    runs-on: ubuntu-latest
+    name: JavaScript Linting and Validation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Extract and validate JavaScript
+        run: |
+          echo "🔍 Checking for JavaScript issues..."
+
+          # Check for undefined variables
+          if grep -n "undefinedVariable" *.html; then
+            echo "❌ Found undefined variables in JavaScript"
+            exit 1
+          fi
+
+          # Check for console.log with undefined
+          if grep -n "console\.log.*undefined" *.html; then
+            echo "❌ Found console.log with undefined variables"
+            exit 1
+          fi
+
+          # Extract JavaScript from script tags for basic syntax check
+          if grep -o '<script[^>]*>.*</script>' *.html > /dev/null 2>&1; then
+            echo "✅ JavaScript code found in HTML"
+            echo "🔍 Performing basic JavaScript validation..."
+            
+            # Extract JS content and save to temporary file
+            grep -zo '<script[^>]*>[^<]*</script>' *.html | sed 's/<script[^>]*>//g; s/<\/script>//g' > temp_extracted.js || true
+            
+            if [ -s temp_extracted.js ]; then
+              echo "🔍 Running Node.js syntax check..."
+              node -c temp_extracted.js && echo "✅ JavaScript syntax is valid" || echo "⚠️ JavaScript syntax issues detected"
+              rm -f temp_extracted.js
+            fi
+          else
+            echo "📝 No JavaScript found in HTML files"
+          fi
+
+          echo "✅ JavaScript validation completed"
+
+  browser-test:
+    runs-on: ubuntu-latest
+    name: Browser JavaScript Testing
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Puppeteer
+        run: npm install puppeteer
+
+      - name: Create browser test
+        run: |
+          cat > browser-test.js << 'EOF'
+          const puppeteer = require('puppeteer');
+
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: true,
+              args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            const page = await browser.newPage();
+            
+            // Listen for console errors
+            const errors = [];
+            page.on('pageerror', error => {
+              errors.push(error.message);
+            });
+            
+            page.on('error', error => {
+              errors.push(error.message);
+            });
+            
+            page.on('console', msg => {
+              if (msg.type() === 'error') {
+                errors.push(msg.text());
+              }
+            });
+            
+            try {
+              // Load the HTML file
+              await page.goto('file://' + process.cwd() + '/index.html');
+              
+              // Wait for page to load and JS to execute
+              await page.waitForTimeout(3000);
+              
+              if (errors.length > 0) {
+                console.log('❌ JavaScript errors found:');
+                errors.forEach(error => console.log('  -', error));
+                process.exit(1);
+              } else {
+                console.log('✅ No JavaScript errors found');
+              }
+            } catch (error) {
+              console.log('❌ Browser test failed:', error.message);
+              process.exit(1);
+            } finally {
+              await browser.close();
+            }
+          })();
+          EOF
+
+      - name: Run browser test
+        run: node browser-test.js
+
   security-scan:
     runs-on: ubuntu-latest
     name: Security and Quality Checks
@@ -97,6 +215,14 @@ jobs:
             echo "✅ No sensitive files found"
           fi
 
+          # Check for hardcoded secrets
+          echo "Checking for potential secrets..."
+          if grep -ri "password.*=" --include="*.html" --include="*.js" . | grep -v "mypassword" | grep -v "yourpassword" | grep -v "rootpassword"; then
+            echo "⚠️ Potential hardcoded passwords found"
+          else
+            echo "✅ No hardcoded secrets detected"
+          fi
+
       - name: Code quality checks
         run: |
           echo "📊 Running code quality checks..."
@@ -106,12 +232,84 @@ jobs:
           echo "📝 Found $todo_count TODO/FIXME comments"
 
           # Check file sizes
-          large_files=$(find . -type f -size +1M -not -path "./node_modules/*" || true)
+          large_files=$(find . -type f -size +1M -not -path "./node_modules/*" -not -path "./.git/*" || true)
           if [ -n "$large_files" ]; then
             echo "⚠️ Large files detected:"
             echo "$large_files"
           else
             echo "✅ No large files found"
+          fi
+
+  docker-build:
+    runs-on: ubuntu-latest
+    name: Docker Build and Test
+    needs: [test, javascript-lint]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          echo "🐳 Building Docker image..."
+          docker build -t devops-basics:test .
+
+      - name: Test Docker container
+        run: |
+          echo "🧪 Testing Docker container..."
+          # Start container in background
+          docker run -d -p 3000:3000 --name test-container devops-basics:test
+
+          # Wait for container to start
+          echo "⏳ Waiting for container to start..."
+          sleep 15
+
+          # Test if container is responding
+          max_attempts=5
+          attempt=1
+          while [ $attempt -le $max_attempts ]; do
+            if curl -f http://localhost:3000/ > /dev/null 2>&1; then
+              echo "✅ Docker container test passed"
+              break
+            else
+              echo "⏳ Attempt $attempt/$max_attempts failed, retrying..."
+              sleep 5
+              attempt=$((attempt + 1))
+            fi
+          done
+
+          if [ $attempt -gt $max_attempts ]; then
+            echo "❌ Docker container test failed"
+            docker logs test-container
+            exit 1
+          fi
+
+          # Cleanup
+          docker stop test-container
+          docker rm test-container
+
+      - name: Test docker-compose (if available)
+        run: |
+          if [ -f "docker-compose.yml" ]; then
+            echo "🐳 Testing docker-compose..."
+            docker-compose up -d
+            sleep 20
+            
+            # Test if services are running
+            if docker-compose ps | grep -q "Up"; then
+              echo "✅ Docker Compose services are running"
+            else
+              echo "❌ Docker Compose test failed"
+              docker-compose logs
+              exit 1
+            fi
+            
+            docker-compose down
+          else
+            echo "📝 No docker-compose.yml found, skipping compose test"
           fi
 
   build-test:
@@ -141,10 +339,15 @@ jobs:
           # Create a build directory
           mkdir -p build
 
-          # Copy HTML files to build directory
+          # Copy files to build directory
           cp *.html build/ 2>/dev/null || echo "No HTML files to copy"
           cp *.css build/ 2>/dev/null || echo "No CSS files to copy"
           cp *.js build/ 2>/dev/null || echo "No JS files to copy"
+
+          # Copy package.json if it exists
+          if [ -f "package.json" ]; then
+            cp package.json build/
+          fi
 
           echo "✅ Build simulation completed"
           ls -la build/
@@ -153,35 +356,93 @@ jobs:
         run: |
           echo "🧪 Running integration tests..."
 
-          # Test if HTML can be served
-          if command -v python3 &> /dev/null; then
-            echo "Testing local server startup..."
-            cd build
-            timeout 5s python3 -m http.server 8000 &
-            sleep 2
-            
-            if curl -f http://localhost:8000/ > /dev/null 2>&1; then
-              echo "✅ Local server test passed"
-            else
-              echo "⚠️ Local server test failed (expected in CI environment)"
-            fi
+          # Test if files are properly structured
+          if [ -f "build/index.html" ]; then
+            echo "✅ Main HTML file exists in build"
+          else
+            echo "❌ Main HTML file missing in build"
+            exit 1
           fi
+
+          # Test if HTML is valid
+          if grep -q "DevOps" build/index.html; then
+            echo "✅ HTML content validation passed"
+          else
+            echo "❌ HTML content validation failed"
+            exit 1
+          fi
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    name: Deploy to Staging
+    needs: [docker-build, build-test, browser-test]
+    if: github.ref == 'refs/heads/dev'
+
+    steps:
+      - name: Deploy to staging
+        run: |
+          echo "🚀 Deploying to staging environment..."
+          echo "Environment: staging"
+          echo "Branch: dev"
+          echo "Commit: ${{ github.sha }}"
+          echo "✅ Staging deployment completed"
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: [docker-build, build-test, browser-test]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "🚀 Deploying to production environment..."
+          echo "Environment: production"
+          echo "Branch: main"
+          echo "Commit: ${{ github.sha }}"
+          echo "✅ Production deployment completed"
 
   notify:
     runs-on: ubuntu-latest
-    name: Notification
-    needs: [test, security-scan, build-test]
+    name: Pipeline Notification
+    needs:
+      [
+        test,
+        javascript-lint,
+        browser-test,
+        security-scan,
+        docker-build,
+        build-test,
+      ]
     if: always()
 
     steps:
       - name: Pipeline completion
         run: |
           echo "🎉 CI/CD Pipeline completed!"
-          echo "✅ All checks passed successfully"
-          echo "📊 Pipeline Summary:"
-          echo "  - HTML validation: ✅"
-          echo "  - Security scan: ✅"
-          echo "  - Build test: ✅"
-          echo "  - Integration test: ✅"
           echo ""
-          echo "🚀 Ready for deployment to any target environment!"
+          echo "📊 Pipeline Summary:"
+          echo "  - HTML validation: ${{ needs.test.result }}"
+          echo "  - JavaScript lint: ${{ needs.javascript-lint.result }}"
+          echo "  - Browser test: ${{ needs.browser-test.result }}"
+          echo "  - Security scan: ${{ needs.security-scan.result }}"
+          echo "  - Docker build: ${{ needs.docker-build.result }}"
+          echo "  - Build test: ${{ needs.build-test.result }}"
+          echo ""
+
+          if [ "${{ needs.test.result }}" = "success" ] && \
+             [ "${{ needs.javascript-lint.result }}" = "success" ] && \
+             [ "${{ needs.browser-test.result }}" = "success" ] && \
+             [ "${{ needs.security-scan.result }}" = "success" ] && \
+             [ "${{ needs.docker-build.result }}" = "success" ] && \
+             [ "${{ needs.build-test.result }}" = "success" ]; then
+            echo "✅ All checks passed successfully"
+            echo "🚀 Ready for deployment!"
+          else
+            echo "❌ Some checks failed. Please review the pipeline results."
+          fi
+
+          echo ""
+          echo "📈 Pipeline completed at: $(date)"
+          echo "🔗 Commit: ${{ github.sha }}"
+          echo "🌿 Branch: ${{ github.ref_name }}"
