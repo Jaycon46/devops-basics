@@ -1,0 +1,32 @@
+{
+	"name": "devops-basics",
+	"version": "1.0.0",
+	"description": "A DevOps basics project with HTML and CI/CD",
+	"main": "index.html",
+	"scripts": {
+		"test": "npm run validate",
+		"validate": "html-validate *.html",
+		"serve": "python3 -m http.server 8000",
+		"dev": "npm run serve",
+		"lint": "html-validate *.html"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Jaycon46/devops-basics.git"
+	},
+	"keywords": [
+		"devops",
+		"html",
+		"ci-cd",
+		"github-actions"
+	],
+	"author": "Jaycon46",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/Jaycon46/devops-basics/issues"
+	},
+	"homepage": "https://github.com/Jaycon46/devops-basics#readme",
+	"devDependencies": {
+		"html-validate": "^8.29.0"
+	}
+}
