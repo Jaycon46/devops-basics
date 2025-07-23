@@ -4,6 +4,7 @@
 	"description": "A DevOps basics project with HTML and CI/CD",
 	"main": "index.html",
 	"scripts": {
+		"start": "http-server -p 3000 -a 0.0.0.0",
 		"test": "npm run validate",
 		"validate": "html-validate *.html",
 		"serve": "python3 -m http.server 8000",
@@ -28,5 +29,8 @@
 	"homepage": "https://github.com/Jaycon46/devops-basics#readme",
 	"devDependencies": {
 		"html-validate": "^8.29.0"
+	},
+	"dependencies": {
+		"http-server": "^14.1.1"
 	}
 }

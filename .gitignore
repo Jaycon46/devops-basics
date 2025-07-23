@@ -49,3 +49,24 @@ pids
 *.pid
 *.seed
 *.pid.lock
+
+# Docker volumes and data directories
+mariadb_data/
+pgdata/
+mysql_data/
+postgres_data/
+db_data/
+data/
+volumes/
+
+# Docker-related files (optional)
+.docker/
+docker-data/
+.dockerignore
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.sql.gz
+*.dump
