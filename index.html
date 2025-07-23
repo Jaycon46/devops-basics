@@ -219,6 +219,10 @@
         card.style.transform = 'translateY(0)';
       });
     });
+    const test = '';
+
+    // Intentional error for CI/CD testing
+    console.log(undefinedVariable); // This will cause a ReferenceError
 
     // Simple health check indicator
     const healthCheck = () => {
